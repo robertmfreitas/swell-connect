@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Connect to Swell</title>
+<!--
+  Swell's OAuth consent page (Supabase Auth OAuth 2.1 server). Supabase sends the
+  browser here with ?authorization_id=…; you sign in with Swell's email code, see
+  which app is asking, and Allow or Deny. Plan: docs/swell-claude-connector.md.
+  The key below is Swell's public publishable key (the same one in the app);
+  row-level security is what protects data, not this key.
+-->
+<style>
+  :root { --bg:#EEEBDF; --surface:#F7F5EE; --ink:#1B1A17; --muted:#6F6B60; --hair:#DCD7C8;
+          --accent:#0B4FE3; --coral:#C2543F; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161613; --surface:#1F1E1A; --ink:#F2EFE6; --muted:#A39E90; --hair:#34322B;
+            --accent:#5B8DFF; --coral:#E07A63; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--ink);
+         font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         display:flex; align-items:center; justify-content:center; padding:16px; }
+  main { width:100%; max-width:400px; background:var(--surface); border:1px solid var(--hair);
+         border-radius:18px; padding:28px 24px; }
+  h1 { font-size:22px; margin:0 0 6px; }
+  p { margin:0 0 16px; color:var(--muted); }
+  label { display:block; font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:0 0 6px; }
+  input { width:100%; font:inherit; padding:12px; border-radius:10px; border:1px solid var(--hair);
+          background:var(--bg); color:var(--ink); margin:0 0 14px; }
+  button { width:100%; font:inherit; font-weight:600; padding:12px; border-radius:12px; border:0;
+           cursor:pointer; background:var(--accent); color:#fff; }
+  button.secondary { background:transparent; color:var(--ink); border:1px solid var(--hair); margin-top:10px; }
+  button:disabled { opacity:.6; cursor:default; }
+  ul { margin:0 0 18px; padding-left:20px; }
+  li { margin:4px 0; }
+  .who { font-size:13px; color:var(--muted); margin-top:18px; }
+  .who a { color:var(--accent); }
+  .error { color:var(--coral); font-size:14px; margin:0 0 14px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <section id="loading"><p>Loading…</p></section>
+
+  <section id="signin" class="hidden">
+    <h1>Sign in to Swell</h1>
+    <p>Use the email on your Swell account. We'll send you a 6-digit code.</p>
+    <form id="emailForm">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="email" required>
+      <button id="sendBtn">Send code</button>
+    </form>
+    <form id="codeForm" class="hidden">
+      <label for="code">Code</label>
+      <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" required>
+      <button id="verifyBtn">Sign in</button>
+    </form>
+  </section>
+
+  <section id="consent" class="hidden">
+    <h1 id="consentTitle">Connect to Swell</h1>
+    <p>It will be able to:</p>
+    <ul>
+      <li>See your projects, tasks, schedule and journal</li>
+      <li>Add, change, reschedule, complete and delete them</li>
+    </ul>
+    <p>Everything it writes shows up in Swell and your calendar. You can disconnect it at any time.</p>
+    <button id="allowBtn">Allow</button>
+    <button id="denyBtn" class="secondary">Deny</button>
+    <div class="who">Signed in as <span id="whoEmail"></span> · <a href="#" id="signOut">Not you?</a></div>
+  </section>
+
+  <section id="done" class="hidden"><h1>All set</h1><p>Taking you back…</p></section>
+
+  <p id="error" class="error hidden"></p>
+</main>
+
+<script type="module">
+  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/+esm";
+
+  const SUPABASE_URL = "https://eogrkthfnfjjqreugmgm.supabase.co";
+  const PUBLISHABLE_KEY = "sb_publishable_fBPVekh6L7wYbwE7UoivkQ_9YulEuxC";
+  const sb = createClient(SUPABASE_URL, PUBLISHABLE_KEY);
+
+  const $ = (id) => document.getElementById(id);
+  const show = (id) => ["loading", "signin", "consent", "done"].forEach((s) => $(s).classList.toggle("hidden", s !== id));
+  const fail = (msg) => { $("error").textContent = msg; $("error").classList.remove("hidden"); };
+  const clearError = () => $("error").classList.add("hidden");
+
+  const authorizationId = new URLSearchParams(location.search).get("authorization_id");
+
+  async function consent() {
+    if (!authorizationId) { show("consent"); $("allowBtn").disabled = $("denyBtn").disabled = true;
+      return fail("This page opens from Claude when you connect Swell. There's nothing to approve here directly."); }
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return show("signin");
+    const { data, error } = await sb.auth.oauth.getAuthorizationDetails(authorizationId);
+    if (error) { show("consent"); return fail(`Couldn't load the request: ${error.message}`); }
+    // Already approved before: Supabase hands back where to go.
+    if (!data.authorization_id && data.redirect_url) { show("done"); return location.assign(data.redirect_url); }
+    $("consentTitle").textContent = `${data.client?.name ?? "An app"} wants to connect to Swell`;
+    $("whoEmail").textContent = user.email ?? "your account";
+    show("consent");
+  }
+
+  async function decide(approve) {
+    clearError();
+    $("allowBtn").disabled = $("denyBtn").disabled = true;
+    const fn = approve ? sb.auth.oauth.approveAuthorization : sb.auth.oauth.denyAuthorization;
+    const { data, error } = await fn.call(sb.auth.oauth, authorizationId);
+    if (error) { $("allowBtn").disabled = $("denyBtn").disabled = false; return fail(error.message); }
+    show("done");
+    location.assign(data.redirect_url);
+  }
+
+  let email = "";
+  $("emailForm").addEventListener("submit", async (e) => {
+    e.preventDefault(); clearError();
+    email = $("email").value.trim();
+    $("sendBtn").disabled = true;
+    // shouldCreateUser: false — this page signs in to an existing Swell account, never makes a new one.
+    const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false } });
+    $("sendBtn").disabled = false;
+    if (error) return fail(error.message);
+    $("emailForm").classList.add("hidden");
+    $("codeForm").classList.remove("hidden");
+    $("code").focus();
+  });
+  $("codeForm").addEventListener("submit", async (e) => {
+    e.preventDefault(); clearError();
+    $("verifyBtn").disabled = true;
+    const { error } = await sb.auth.verifyOtp({ email, token: $("code").value.trim(), type: "email" });
+    $("verifyBtn").disabled = false;
+    if (error) return fail(error.message);
+    consent();
+  });
+  $("allowBtn").addEventListener("click", () => decide(true));
+  $("denyBtn").addEventListener("click", () => decide(false));
+  $("signOut").addEventListener("click", async (e) => { e.preventDefault(); await sb.auth.signOut(); show("signin"); });
+
+  consent().catch((e) => { show("signin"); fail(String(e.message ?? e)); });
+</script>
+</body>
+</html>
